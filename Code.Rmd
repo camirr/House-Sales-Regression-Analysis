@@ -1,0 +1,482 @@
+---
+title: "Appendix"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.width=6, fig.height=5)
+
+```
+
+## Data Cleaning and Preprocessing
+```{r}
+#Importing data
+library(conflicted)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(car)
+library(MASS)
+library(lmtest)
+library(mgcv)
+library(corrplot)
+library(glmnet)
+```
+
+```{r}
+# Load the data
+fulldata <- read.csv("kc_house_data.csv")
+```
+
+```{r}
+# View Data Structure
+head(fulldata)
+summary(fulldata)
+str(fulldata)
+```
+
+```{r}
+# Dropping categorical variable and id
+fulldata <- fulldata %>%
+  dplyr::select(-id, -date)
+```
+
+```{r}
+# Check for missing values
+summarize_missing <- function(fulldata) {
+  sapply(fulldata, function(x) sum(is.na(x)))
+}
+summarize_missing(fulldata)
+```
+```{r}
+# Set the seed for reproducibility
+set.seed(42)
+
+# Randomly sample 500 observations for the training set
+data <- fulldata %>% 
+  sample_n(500)
+
+```
+
+## Exploratory Data Analysis
+```{r}
+# Distribution of prices (target variable)
+ggplot(data, aes(x = price)) +
+  geom_histogram(bins = 30, color = "black", fill = "lightblue") +
+  labs(title = "Price Distribution", x = "Price", y = "Frequency")
+```
+
+```{r}
+# Plotting histograms for each numerical variable
+data %>% 
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) + 
+    geom_histogram(bins = 30) + 
+    facet_wrap(~key, scales = 'free_x')
+```
+```{r}
+# Boxplot to check for outliers
+data %>% 
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(x = key, y = value)) + 
+    geom_boxplot() + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+```{r}
+# Correlation matrix and visualization
+correlation_matrix <- cor(data)
+corrplot(correlation_matrix, method = "circle")
+```
+
+## Model Building
+```{r}
+# Building a linear regression model (baseline)
+model0 <- lm(price ~ ., data = data)
+summary(model0)
+```
+
+```{r}
+# Building a linear regression model (baseline)
+model0 <- lm(scale(data$price) ~ ., data = data)
+predictions_model0 <- predict(model0, newdata = data)
+
+# Calculate MSE, RMSE and R-squared
+Y_0 <- scale(data$price)
+mse_0 <- mean((Y_0 - predictions_model0)^2)
+rmse_0 <-sqrt(mse_0)
+total_ss_0 <- sum((Y_0 - mean(Y_0))^2)
+residual_ss_0 <- sum((Y_0 - predictions_model0)^2)
+r_squared_0 <- 1 - (residual_ss_0 / total_ss_0)
+
+print(paste("MSE for Baseline Model: ", mse_0))
+print(paste("RMSE for Baseline Model: ", rmse_0))
+print(paste("R-squared for Baseline Model: ", r_squared_0))
+```
+
+
+```{r}
+# Identify potential issues with multicollinearity or aliasing among predictors
+alias_matrix <- alias(model0)
+print(alias_matrix)
+```
+```{r}
+# Removing the 'sqft_basement' column to potentially address issues identified in the alias matrix
+data <- data %>% dplyr::select(-sqft_basement)
+```
+
+```{r}
+# Re-fit the model
+model_reduced <- lm(price ~ ., data = data)
+```
+
+```{r}
+# Model Diagnostic Plots
+par(mfrow = c(1, 2))
+plot(model_reduced)
+```
+```{r}
+# Model Diagnostic Tests
+bptest<-bptest(model_reduced)
+swtest<-shapiro.test(resid(model_reduced))
+cat("To test equal variance, we use bptest, Pvalue =", bptest$p.value, "<0.05, the equal variance assumption violates", "\n",
+    "To test normality, we use swtest, Pvalue =", swtest$p.value, "<0.05, the normality assumption violates", "\n")
+
+```
+
+```{r}
+# Identify variables with high multicollinearity
+vif_values <- vif(model_reduced)
+print(vif_values)
+
+# Apply a cutoff of 5 to VIF values to identify variables to consider for removal
+high_vif <- names(vif_values[vif_values > 5])
+cat("Variables with VIF > 5, suggesting removal due to high multicollinearity:", high_vif)
+```
+```{r}
+# Remove sqft_living sqft_above and refit the model
+data <- data %>% dplyr::select(-sqft_above, -sqft_living)
+model_reduced <- lm(price ~ ., data = data)
+
+vif_values <- vif(model_reduced)
+print(vif_values)
+```
+```{r}
+# Perform stepwise selection
+model_step <- step(lm(price ~ ., data = data), direction = "both")
+summary(model_step)
+```
+
+```{r}
+#Check model assumptions
+plot(fitted(model_step), resid(model_step), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Residual plot")
+abline(h = 0, col = "darkorange", lwd = 2)
+```
+
+```{r}
+#Check model assumptions
+qqnorm(resid(model_step), 
+       main = "Normal Q-Q Plot")
+qqline(resid(model_step), col = "red", lty = 2)
+```
+
+```{r}
+#Model Diagnostic Tests
+swtest<-shapiro.test(resid(model_step))
+bptest<-bptest(model_step)
+cat("To test equal variance, we use bptest, Pvalue =",bptest$p.value,"<0.05, the equal variance assumption violates","\n","To test normality , we use swtest, Pvalue =",swtest$p.value,"<0.05, the normality violates","\n")
+```
+
+```{r}
+#Transform to sqrt
+data$price_sqrt <- sqrt(data$price)
+ggplot(data, aes(x = price_sqrt)) +
+  geom_histogram(bins = 30, color = "black", fill = "lightblue") +
+  labs(title = "price_trans Distribution", x = "price_sqrt", y = "Frequency")
+
+model_trans <- lm(price_sqrt ~ bedrooms + bathrooms + sqft_lot + view + 
+    condition + grade + yr_built + lat + sqft_living15, data = data)
+par(mfrow = c(1, 2))
+plot(model_trans)
+```
+
+```{r}
+# Box-Cox Transform
+boxcox_result <- boxcox(model_trans, lambda = seq(-2, 2, by = 0.1))
+lambda <- boxcox_result$x[which.max(boxcox_result$y)]
+cat("Optimal lambda:", lambda, "\n")
+```
+```{r}
+# Further transformation
+data$price_trans <- (data$price^lambda - 1) / lambda
+ggplot(data, aes(x = price_trans)) +
+  geom_histogram(bins = 30, color = "black", fill = "lightblue") +
+  labs(title = "price_trans Distribution", x = "price_trans", y = "Frequency")
+
+model_trans <- lm(price_trans ~ bedrooms + bathrooms + sqft_lot + view + 
+    condition + grade + yr_built + lat + sqft_living15, data = data)
+par(mfrow = c(1, 2))
+plot(model_trans)
+```
+```{r}
+# Calculate Cook's distance to identify influential points
+cooksD <- cooks.distance(model_trans)
+# Cook's distance larger than 4/(n-k-1) to be considered as influential points
+threshold <- 4 / (length(cooksD) - length(coef(model_trans)) - 1)
+influential_points <- which(cooksD > threshold)
+
+# Plot Cook's distance
+plot(cooksD, type="h", main="Cook's distance", ylab="Cook's distance")
+abline(h=threshold, col="red")
+
+# Identify high leverage points
+leverage <- hatvalues(model_trans)
+# Leverage threshold of 2*k/n
+lev_threshold <- 2 * length(coef(model_trans)) / length(leverage)
+high_leverage_points <- which(leverage > lev_threshold)
+
+# Plot leverage
+plot(leverage, type="h", main="Leverage Values", ylab="Hat Values")
+abline(h=lev_threshold, col="red")
+
+```
+
+```{r}
+# Remove influential points based on Cook's distance or leverage
+data <- data[-c(influential_points, high_leverage_points), ]
+
+# Refit the model without the influential points
+model_clean <- lm(price_trans ~ bedrooms + bathrooms + sqft_lot + view + 
+    condition + grade + yr_built + lat + sqft_living15, data=data)
+par(mfrow=c(1,2))
+plot(model_clean)
+```
+
+
+
+```{r}
+#Model Diagnostic Tests
+shapiro.test(resid(model_clean))
+bptest(model_clean)
+```
+```{r}
+# List of predictors
+predictors <- c("bedrooms", "bathrooms", "sqft_lot", "view", 
+                "condition", "grade", "yr_built", "lat", "sqft_living15")
+
+# Loop through each predictor and create a plot
+for (pred in predictors) {
+    p <- ggplot(data, aes_string(x = pred, y = "price_trans")) +
+        geom_point(alpha = 0.5) +  
+        geom_smooth(method = "loess", color = "blue", se = FALSE) +  
+        labs(title = paste("Scatterplot of Price vs", pred),
+             x = pred,
+             y = "price_trans") 
+    print(p)  
+}
+
+```
+
+```{r}
+# Fit a model with polynomial terms for selected predictors
+model_poly <- lm(price_trans ~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) + 
+                     factor(view) + condition + poly(grade, 2) + poly(yr_built, 2) + 
+                     lat + poly(sqft_living15, 2), data = data)
+
+summary(model_poly)
+residuals <- residuals(model_poly)
+shapiro.test(residuals)
+bptest(model_poly)
+```
+
+```{r}
+# Log Transformation
+model_log <- model_poly <- lm(log(price_trans) ~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) + factor(view) + condition + poly(grade, 2) + poly(yr_built, 2) + lat + poly(sqft_living15, 2), data = data)
+
+summary(model_log)
+residuals <- residuals(model_log)
+shapiro.test(residuals)
+bptest(model_log)
+```
+```{r}
+model_log1 <- model_poly <- lm(scale(log(price_trans)) ~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) + factor(view) + condition + poly(grade, 2) + poly(yr_built, 2) + lat + poly(sqft_living15, 2), data = data)
+
+predictions_model_log <- predict(model_log1, newdata = data)
+
+# Calculate MSE, RMSE and R-squared
+Y_log <- scale(data$price)
+mse_log <- mean((Y_log - predictions_model_log)^2)
+rmse_log <-sqrt(mse_log)
+total_ss_log <- sum((Y_log - mean(Y_log))^2)
+residual_ss_log <- sum((Y_log - predictions_model_log)^2)
+r_squared_log <- 1 - (residual_ss_log / total_ss_log)
+
+print(paste("MSE for Transformed Model: ", mse_log))
+print(paste("RMSE for Transformed Model: ", rmse_log))
+print(paste("R-squared for Transformed Model: ", r_squared_log))
+```
+
+```{r}
+#Check model assumptions
+plot(fitted(model_log), resid(model_log), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Residual plot")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+qqnorm(resid(model_log), 
+       main = "Normal Q-Q Plot")
+qqline(resid(model_log), col = "red", lty = 2)
+```
+
+```{r}
+Y <- log(data$price_trans)
+
+# Create a matrix of predictors
+X <- model.matrix(Y ~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) + factor(view) + condition + poly(grade, 2) + poly(yr_built, 2) + lat + poly(sqft_living15, 2), data = data)[,-1]
+
+```
+
+```{r}
+# Set up cross-validation for Lasso and Ridge
+set.seed(123)  
+cv_lasso <- cv.glmnet(X, Y, alpha = 1, nfolds = 10)  # Lasso
+cv_ridge <- cv.glmnet(X, Y, alpha = 0, nfolds = 10)  # Ridge
+
+# Extract the best lambda values
+lambda_best_lasso <- cv_lasso$lambda.min
+lambda_best_ridge <- cv_ridge$lambda.min
+
+```
+
+```{r}
+# Coefficients at the best lambda for Lasso
+coefficients_lasso <- coef(cv_lasso, s = "lambda.min")
+print(coefficients_lasso)
+
+# Coefficients at the best lambda for Ridge
+coefficients_ridge <- coef(cv_ridge, s = "lambda.min")
+print(coefficients_ridge)
+
+# Plot the CV results for Lasso
+plot(cv_lasso)
+# Plot the CV results for Ridge
+plot(cv_ridge)
+```
+
+```{r}
+# Predictions using the best lambda
+predictions_lasso <- predict(cv_lasso, newx = X, s = "lambda.min")
+predictions_ridge <- predict(cv_ridge, newx = X, s = "lambda.min")
+
+# Calculate MSE and R-squared
+mse_lasso <- mean((Y - predictions_lasso)^2)
+mse_ridge <- mean((Y - predictions_ridge)^2)
+
+print(paste("MSE for Lasso: ", mse_lasso))
+print(paste("MSE for Ridge: ", mse_ridge))
+
+ss_res_lasso <- sum((Y - predictions_lasso)^2)
+ss_tot_lasso <- sum((Y - mean(Y))^2)
+r_squared_lasso <- 1 - ss_res_lasso / ss_tot_lasso
+cat("R-squared for Lasso:", r_squared_lasso, "\n")
+
+ss_res_ridge <- sum((Y - predictions_ridge)^2)
+ss_tot_ridge <- sum((Y - mean(Y))^2)
+r_squared_ridge <- 1 - ss_res_ridge / ss_tot_ridge
+cat("R-squared for Ridge:", r_squared_ridge, "\n")
+```
+```{r}
+# Prepare the matrix of predictors for glmnet, excluding non-significant predictors identified from Lasso
+X_filtered <- model.matrix(~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) +factor(view) + condition + poly(grade, 2) + poly(yr_built, 2) +lat + poly(sqft_living15, 2), data = data)[,-1] 
+
+# Exclude columns identified as non-significant if needed
+X_final <- X_filtered[, !colnames(X_filtered) %in% c("poly(bathrooms, 2)2", "factor(view)3")]
+
+# Response variable already log-transformed
+Y_final <- log(data$price_trans)
+
+```
+
+```{r}
+# Refitting Lasso model with final predictor set
+cv_lasso_final <- cv.glmnet(X_final, Y_final, alpha = 1, nfolds = 10)  
+best_lambda_final <- cv_lasso_final$lambda.min
+
+```
+
+```{r}
+# Extracting coefficients at the best lambda
+coefficients_final <- coef(cv_lasso_final, s = "lambda.min")
+print(coefficients_final)
+
+# Predictions using the best lambda
+predictions_final <- predict(cv_lasso_final, newx = X_final, s = "lambda.min")
+
+# Calculate new MSE, RMSE and R-squared
+mse_final <- mean((Y_final - predictions_final)^2)
+rmse_final <-sqrt(mse_final)
+total_ss_final <- sum((Y_final - mean(Y_final))^2)
+residual_ss_final <- sum((Y_final - predictions_final)^2)
+r_squared_final <- 1 - (residual_ss_final / total_ss_final)
+
+print(paste("New MSE for Final Lasso Model: ", mse_final))
+print(paste("New RMSE for Final Lasso Model: ", rmse_final))
+print(paste("New R-squared for Final Lasso Model: ", r_squared_final))
+```
+```{r}
+# Plotting MSE path for the final Lasso model
+plot(cv_lasso_final)
+
+# Optionally, plot diagnostics for residuals
+plot(Y_final, predictions_final)
+abline(0, 1)  
+```
+```{r}
+# Model Diagnosis for final model
+final_model_formula <- log(data$price_trans) ~ poly(bedrooms, 2) + poly(bathrooms, 2) + poly(sqft_lot, 3) + factor(view) + condition + 
+poly(grade, 2) + poly(yr_built, 2) + lat + poly(sqft_living15, 2)
+
+
+Y_final <- log(data$price_trans)
+X_final <- model.matrix(final_model_formula, data = data)[, -1]
+residuals_final <- Y_final - predictions_final
+
+model_final <- lm(Y_final ~ X_final)
+
+bp_results <- bptest(model_final)
+shapiro_results <- shapiro.test(residuals_final)
+
+print(shapiro_results)
+print(bp_results)
+summary(model_final)
+```
+```{r}
+#Check model assumptions
+plot(fitted(model_final), resid(model_final), col = "grey", pch = 20,
+     xlab = "Fitted", ylab = "Residuals", main = "Residual plot")
+abline(h = 0, col = "darkorange", lwd = 2)
+
+qqnorm(resid(model_final), 
+       main = "Normal Q-Q Plot")
+qqline(resid(model_final), col = "red", lty = 2)
+```
+
+## Model Evaluation Comparison
+```{r}
+# Combine the metrics into a data frame for comparison
+comparison_table <- data.frame(
+  Model = c("Model 0", "Model Log", "Model Final"),
+  MSE = c(mse_0, mse_log, mse_final),
+  RMSE = c(rmse_0, rmse_log, rmse_final),
+  R_squared = c(r_squared_0, r_squared_log, r_squared_final)
+)
+
+# Print the comparison table
+print(comparison_table)
+```
+
+
+
+
